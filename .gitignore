@@ -1,0 +1,36 @@
+# Build artifacts
+obj/
+bin/
+
+# Compiled binaries
+*.o
+*.exe
+fantech-driver
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Dependency files
+*.d
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Configuration files (user-specific)
+driver.conf
+config.conf
+
+# Backup files
+*.bak
+*.backup
