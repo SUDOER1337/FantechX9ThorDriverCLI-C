@@ -1,6 +1,6 @@
 # Fantech X9 Thor Driver CLI - C Implementation
 
-A C implementation of Fantech X9 Thor RGB gaming mouse driver, **inspired by** [GuessWhatBBQ's FantechX9ThorDriver](https://github.com/GuessWhatBBQ/FantechX9ThorDriver). This rewrite gives minimalist performance of C with CLI interface.
+A C implementation of Fantech X9 Thor RGB gaming mouse driver, **inspired by** [GuessWhatBBQ's FantechX9ThorDriver](https://github.com/GuessWhatBBQ/FantechX9ThorDriver). This gives minimalist performance of C with CLI interface.
 
 ## Project Structure
 
