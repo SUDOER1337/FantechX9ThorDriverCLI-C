@@ -64,15 +64,12 @@ make
 make debug
 ```
 
-### Release Build
+### Release Build & Install System-wide
 ```bash
-make release
+make release && sudo make install
 ```
 
-### Install System-wide
-```bash
-sudo make install
-```
+
 
 ## Usage
 
