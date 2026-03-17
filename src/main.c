@@ -70,6 +70,10 @@ int main(int argc, char *argv[]) {
             command_result = cmd_handle_preset(&driver, &args);
             break;
             
+        case CMD_RESET:
+            command_result = cmd_handle_reset(&driver, &args);
+            break;
+            
         case CMD_CONFIG:
             command_result = cmd_handle_config(&driver, &args);
             break;

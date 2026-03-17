@@ -15,6 +15,7 @@ void cli_print_help(void) {
     printf("  set-rgb <mode> <speed>           Set RGB lighting mode (Fixed/Cyclic/Static/Off, speed 1-10)\n");
     printf("  set-color <profile> <r> <g> <b>  Set RGB color for a profile (profile 1-6, rgb 0-255)\n");
     printf("  preset [--conf path]             Apply configuration from config file\n");
+    printf("  reset                             Reset mouse to firmware defaults\n");
     printf("  config <subcommand>              Manage configuration files\n");
     printf("    info                           Show configuration information\n");
     printf("    migrate [--conf path]           Migrate local config to ~/.config\n");
@@ -31,6 +32,7 @@ void cli_print_help(void) {
     printf("  fantech-driver set-color 1 255 0 0\n");
     printf("  fantech-driver set-rgb Static 6\n");
     printf("  fantech-driver preset --conf ~/.config/fantech-x9-thor/gaming.conf\n");
+    printf("  fantech-driver reset\n");
 }
 
 // Print version information
@@ -150,6 +152,9 @@ int cli_parse_args(int argc, char *argv[], cli_args_t *args) {
             }
         }
         
+    } else if (strcmp(argv[1], "reset") == 0) {
+        args->command = CMD_RESET;
+        
     } else if (strcmp(argv[1], "config") == 0) {
         args->command = CMD_CONFIG;
         if (argc < 3) {
@@ -268,8 +273,6 @@ int cmd_handle_set_color(usb_driver_t *driver, const cli_args_t *args) {
 int cmd_handle_preset(usb_driver_t *driver, const cli_args_t *args) {
     if (!args) return -1;
     
-    (void)driver;  // Driver parameter not used in current implementation
-    
     char config_path[512];
     if (strlen(args->config_path) > 0) {
         strncpy(config_path, args->config_path, sizeof(config_path) - 1);
@@ -286,11 +289,93 @@ int cmd_handle_preset(usb_driver_t *driver, const cli_args_t *args) {
         return -1;
     }
     
-    // Apply configuration to device
-    // This would involve sending multiple payloads for each setting
-    printf("Configuration from '%s' has been sent to mouse (active profile %d)\n", 
+    // Apply DPI settings for all profiles
+    for (int i = 0; i < MAX_PROFILES; i++) {
+        if (config.profiles[i].enabled) {
+            usb_payload_t dpi_payload;
+            usb_create_dpi_profile_config(&dpi_payload, config.profiles[i].dpi, i);
+            if (usb_driver_send_payload(driver, &dpi_payload) == 0) {
+                printf("DPI for profile %d set to %d.\n", i, config.profiles[i].dpi);
+            } else {
+                fprintf(stderr, "Failed to set DPI for profile %d\n", i);
+            }
+        }
+    }
+    
+    // Apply color settings for all profiles
+    for (int i = 0; i < MAX_PROFILES; i++) {
+        if (config.profiles[i].enabled) {
+            usb_payload_t color_payload;
+            usb_create_color_profile_config(&color_payload, i + 1, 
+                                          config.profiles[i].red,
+                                          config.profiles[i].green, 
+                                          config.profiles[i].blue);
+            if (usb_driver_send_payload(driver, &color_payload) == 0) {
+                printf("Set profile %d color to R:%d G:%d B:%d.\n", 
+                       i + 1, config.profiles[i].red, config.profiles[i].green, config.profiles[i].blue);
+            } else {
+                fprintf(stderr, "Failed to set color for profile %d\n", i + 1);
+            }
+        }
+    }
+    
+    // Apply RGB lighting mode
+    usb_payload_t rgb_payload;
+    usb_create_rgb_lights_config(&rgb_payload, config.color_scheme, config.scheme_duration);
+    if (usb_driver_send_payload(driver, &rgb_payload) == 0) {
+        printf("Lighting mode set to %s with speed %d.\n", 
+               config_color_scheme_to_string(config.color_scheme), config.scheme_duration);
+    } else {
+        fprintf(stderr, "Failed to set lighting mode\n");
+    }
+    
+    printf("Configuration from '%s' has been applied to mouse (active profile %d)\n", 
            config_path, config.active_profile);
     
+    return 0;
+}
+
+// Handle reset command
+int cmd_handle_reset(usb_driver_t *driver, const cli_args_t *args) {
+    (void)args;  // Unused parameter
+    
+    printf("Resetting mouse to firmware defaults...\n");
+    
+    // Firmware default DPI settings: [200, 600, 1200, 1600, 2400, 4000]
+    int default_dpis[] = {200, 600, 1200, 1600, 2400, 4000};
+    
+    // Apply default DPI settings for all profiles
+    for (int i = 0; i < 6; i++) {
+        usb_payload_t dpi_payload;
+        usb_create_dpi_profile_config(&dpi_payload, default_dpis[i], i);
+        if (usb_driver_send_payload(driver, &dpi_payload) == 0) {
+            printf("DPI for profile %d reset to %d.\n", i, default_dpis[i]);
+        } else {
+            fprintf(stderr, "Failed to reset DPI for profile %d\n", i);
+        }
+    }
+    
+    // Apply default color settings (orange: 255, 73, 0) for all profiles
+    for (int i = 1; i <= 6; i++) {
+        usb_payload_t color_payload;
+        usb_create_color_profile_config(&color_payload, i, 255, 73, 0);
+        if (usb_driver_send_payload(driver, &color_payload) == 0) {
+            printf("Profile %d color reset to R:255 G:73 B:0.\n", i);
+        } else {
+            fprintf(stderr, "Failed to reset color for profile %d\n", i);
+        }
+    }
+    
+    // Apply default RGB lighting mode (Static with speed 6)
+    usb_payload_t rgb_payload;
+    usb_create_rgb_lights_config(&rgb_payload, COLOR_SCHEME_STATIC, 6);
+    if (usb_driver_send_payload(driver, &rgb_payload) == 0) {
+        printf("Lighting mode reset to Static with speed 6.\n");
+    } else {
+        fprintf(stderr, "Failed to reset lighting mode\n");
+    }
+    
+    printf("Mouse has been reset to firmware defaults.\n");
     return 0;
 }
 
