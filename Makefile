@@ -2,7 +2,7 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -O2
-LDFLAGS = -lusb-1.0 -lm
+LDFLAGS = -lusb-1.0 -lm -lpthread
 
 # Directories
 SRCDIR = src
@@ -41,7 +41,7 @@ clean-install: clean directories install
 	@echo "Clean install completed!"
 
 # Install to system
-install: $(TARGET)
+install: directories $(TARGET)
 	@echo "Installing fantech-driver to /usr/local/bin..."
 	sudo cp $(TARGET) /usr/local/bin/
 	sudo chmod 755 /usr/local/bin/fantech-driver

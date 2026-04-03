@@ -1,9 +1,12 @@
 #include "cli.h"
+#include "usb_driver.h"
 #include "config.h"
-#include <stdio.h>
+#include "error.h"
+#include "device_monitor.h"
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <unistd.h>
 
 // Print help information
 void cli_print_help(void) {
@@ -20,6 +23,12 @@ void cli_print_help(void) {
     printf("    info                           Show configuration information\n");
     printf("    migrate [--conf path]           Migrate local config to ~/.config\n");
     printf("    presets                        List available presets\n");
+    printf("  monitor <subcommand>             Monitor device events\n");
+    printf("    start [--auto path]            Start monitoring (optional auto-apply config)\n");
+    printf("    stop                           Stop monitoring\n");
+    printf("    status                         Show monitoring status\n");
+    printf("    events [timeout]               Show recent events (timeout in seconds)\n");
+    printf("  daemon [--auto path]             Run as daemon with auto-apply\n");
     printf("\n");
     printf("Options:\n");
     printf("  --conf, -c <path>    Specify configuration file path\n");
@@ -44,8 +53,8 @@ void cli_print_version(void) {
 // Validate DPI value
 int cli_validate_dpi(int dpi) {
     if (dpi < 200 || dpi > 4800) {
-        fprintf(stderr, "Error: DPI %d out of supported range (200-4800)\n", dpi);
-        return -1;
+        RETURN_ERROR_DETAILS(ERROR_OUT_OF_RANGE, "DPI value out of range", 
+                           "Supported DPI range is 200-4800");
     }
     return 0;
 }
@@ -53,8 +62,8 @@ int cli_validate_dpi(int dpi) {
 // Validate profile number
 int cli_validate_profile(int profile) {
     if (profile < 0 || profile > 5) {
-        fprintf(stderr, "Error: Profile %d out of range (0-5)\n", profile);
-        return -1;
+        RETURN_ERROR_DETAILS(ERROR_OUT_OF_RANGE, "Profile number out of range", 
+                           "Supported profile range is 0-5");
     }
     return 0;
 }
@@ -175,6 +184,38 @@ int cli_parse_args(int argc, char *argv[], cli_args_t *args) {
             } else if (strcmp(argv[i], "--conf") == 0 && i + 1 < argc && strcmp(args->config_subcommand, "migrate") == 0) {
                 // For migrate command, also accept --conf as source
                 strncpy(args->config_source, argv[i + 1], sizeof(args->config_source) - 1);
+                i++;
+            }
+        }
+        
+    } else if (strcmp(argv[1], "monitor") == 0) {
+        args->command = CMD_MONITOR;
+        if (argc < 3) {
+            RETURN_ERROR_DETAILS(ERROR_INVALID_ARGS, "monitor requires a subcommand", 
+                               "Use: start, stop, status, or events");
+        }
+        
+        strncpy(args->monitor_subcommand, argv[2], sizeof(args->monitor_subcommand) - 1);
+        
+        // Parse monitor subcommand arguments
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--auto") == 0 && i + 1 < argc) {
+                strncpy(args->config_path, argv[i + 1], sizeof(args->config_path) - 1);
+                i++;
+            } else if (strcmp(args->monitor_subcommand, "events") == 0 && i == 3) {
+                args->monitor_timeout = atoi(argv[i]);
+                if (args->monitor_timeout <= 0) args->monitor_timeout = 10; // Default 10 seconds
+            }
+        }
+        
+    } else if (strcmp(argv[1], "daemon") == 0) {
+        args->command = CMD_DAEMON;
+        args->monitor_timeout = 0; // Run indefinitely
+        
+        // Parse daemon arguments
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--auto") == 0 && i + 1 < argc) {
+                strncpy(args->config_path, argv[i + 1], sizeof(args->config_path) - 1);
                 i++;
             }
         }
@@ -411,8 +452,27 @@ int cmd_handle_config(usb_driver_t *driver, const cli_args_t *args) {
         }
         
     } else if (strcmp(args->config_subcommand, "presets") == 0) {
-        printf("Available presets:\n");
-        printf("  (Preset functionality not yet implemented in C version)\n");
+        preset_info_t presets[MAX_PRESETS];
+        int preset_count = 0;
+        
+        if (config_list_presets(presets, &preset_count) == 0) {
+            if (preset_count == 0) {
+                printf("No presets found. Create presets using the preset system.\n");
+                printf("Presets are stored in: ~/.config/fantech-x9-thor/presets/\n");
+            } else {
+                printf("Available presets (%d found):\n", preset_count);
+                for (int i = 0; i < preset_count; i++) {
+                    printf("  %-20s - %s\n", presets[i].name, presets[i].description);
+                    printf("  Path: %s\n", presets[i].path);
+                }
+                printf("\nUsage examples:\n");
+                printf("  fantech-driver preset --conf ~/.config/fantech-x9-thor/presets/gaming.conf\n");
+                printf("  fantech-driver preset --conf %s\n", presets[0].path);
+            }
+        } else {
+            fprintf(stderr, "Error: Could not list presets\n");
+            return -1;
+        }
         
     } else {
         fprintf(stderr, "Unknown config subcommand: %s\n", args->config_subcommand);
@@ -421,3 +481,155 @@ int cmd_handle_config(usb_driver_t *driver, const cli_args_t *args) {
     
     return 0;
 }
+
+// Global monitor instance for CLI commands
+static device_monitor_t *g_monitor = NULL;
+
+// Device event callback for CLI
+static void cli_event_callback(const device_event_t *event, void *user_data) {
+    (void)user_data;
+    
+    const char *event_type_str = "Unknown";
+    switch (event->type) {
+        case DEVICE_EVENT_CONNECT: event_type_str = "Connected"; break;
+        case DEVICE_EVENT_DISCONNECT: event_type_str = "Disconnected"; break;
+        case DEVICE_EVENT_ERROR: event_type_str = "Error"; break;
+    }
+    
+    printf("[%s] %s - VID:0x%04X PID:0x%04X (%s)\n", 
+           event->timestamp, event_type_str, event->vendor_id, event->product_id, event->details);
+}
+
+// Handle monitor command
+int cmd_handle_monitor(usb_driver_t *driver, const cli_args_t *args) {
+    (void)driver; // USB driver not needed for monitoring
+    
+    if (strcmp(args->monitor_subcommand, "start") == 0) {
+        if (g_monitor && device_monitor_is_running(g_monitor)) {
+            printf("Device monitoring is already running\n");
+            return 0;
+        }
+        
+        device_monitor_config_t config = {
+            .target_vendor_id = FANTECH_VENDOR_ID,
+            .target_product_id = FANTECH_PRODUCT_ID,
+            .poll_interval_ms = 500,
+            .auto_apply_config = false
+        };
+        
+        if (strlen(args->config_path) > 0) {
+            strncpy(config.config_path, args->config_path, sizeof(config.config_path) - 1);
+            config.auto_apply_config = true;
+        }
+        
+        g_monitor = device_monitor_create(&config);
+        if (!g_monitor) {
+            RETURN_ERROR(ERROR_MEMORY, "Failed to create device monitor");
+        }
+        
+        if (device_monitor_set_callback(g_monitor, cli_event_callback, NULL) != 0) {
+            device_monitor_destroy(g_monitor);
+            g_monitor = NULL;
+            RETURN_ERROR(ERROR_GENERIC, "Failed to set monitor callback");
+        }
+        
+        if (device_monitor_start(g_monitor) != 0) {
+            device_monitor_destroy(g_monitor);
+            g_monitor = NULL;
+            RETURN_ERROR(ERROR_GENERIC, "Failed to start device monitoring");
+        }
+        
+        printf("Device monitoring started%s\n", config.auto_apply_config ? " with auto-apply" : "");
+        printf("Press Ctrl+C to stop monitoring\n");
+        
+        // Wait for interrupt
+        while (device_monitor_is_running(g_monitor)) {
+            sleep(1);
+        }
+        
+    } else if (strcmp(args->monitor_subcommand, "stop") == 0) {
+        if (!g_monitor) {
+            printf("Device monitoring is not running\n");
+            return 0;
+        }
+        
+        device_monitor_stop(g_monitor);
+        device_monitor_destroy(g_monitor);
+        g_monitor = NULL;
+        printf("Device monitoring stopped\n");
+        
+    } else if (strcmp(args->monitor_subcommand, "status") == 0) {
+        if (!g_monitor) {
+            printf("Device monitoring: Not started\n");
+        } else if (device_monitor_is_running(g_monitor)) {
+            printf("Device monitoring: Running\n");
+            // Note: We can't access g_monitor->config directly due to incomplete type
+            // This would need to be exposed via device_monitor API if needed
+        } else {
+            printf("Device monitoring: Stopped\n");
+        }
+        
+    } else if (strcmp(args->monitor_subcommand, "events") == 0) {
+        if (!g_monitor) {
+            printf("Device monitoring is not running\n");
+            return 0;
+        }
+        
+        printf("Listening for events (timeout: %d seconds)...\n", args->monitor_timeout);
+        
+        device_event_t event;
+        int timeout_ms = args->monitor_timeout * 1000;
+        
+        while (device_monitor_is_running(g_monitor) && timeout_ms > 0) {
+            if (device_monitor_get_next_event(g_monitor, &event, 1000) == 0) {
+                cli_event_callback(&event, NULL);
+            }
+            timeout_ms -= 1000;
+        }
+        
+    } else {
+        RETURN_ERROR_DETAILS(ERROR_INVALID_ARGS, "Unknown monitor subcommand", 
+                           "Use: start, stop, status, or events");
+    }
+    
+    return 0;
+}
+
+// Handle daemon command
+int cmd_handle_daemon(usb_driver_t *driver, const cli_args_t *args) {
+    (void)driver; // USB driver not needed for daemon mode
+    
+    device_monitor_config_t config = {
+        .target_vendor_id = FANTECH_VENDOR_ID,
+        .target_product_id = FANTECH_PRODUCT_ID,
+        .poll_interval_ms = 1000,
+        .auto_apply_config = false
+    };
+    
+    if (strlen(args->config_path) > 0) {
+        strncpy(config.config_path, args->config_path, sizeof(config.config_path) - 1);
+        config.auto_apply_config = true;
+    }
+    
+    g_monitor = device_monitor_create(&config);
+    if (!g_monitor) {
+        RETURN_ERROR(ERROR_MEMORY, "Failed to create device monitor");
+    }
+    
+    if (device_monitor_start(g_monitor) != 0) {
+        device_monitor_destroy(g_monitor);
+        g_monitor = NULL;
+        RETURN_ERROR(ERROR_GENERIC, "Failed to start daemon");
+    }
+    
+    printf("Fantech X9 Thor daemon started%s\n", config.auto_apply_config ? " with auto-apply" : "");
+    printf("Monitoring device changes...\n");
+    
+    // Run indefinitely
+    while (device_monitor_is_running(g_monitor)) {
+        sleep(1);
+    }
+    
+    return 0;
+}
+

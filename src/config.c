@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <libgen.h>
 #include <string.h>
+#include <dirent.h>
 
 // Get configuration file paths
 int config_get_paths(config_paths_t *paths) {
@@ -22,6 +23,7 @@ int config_get_paths(config_paths_t *paths) {
     
     snprintf(paths->user_config_dir, sizeof(paths->user_config_dir), "%s/%s", home, USER_CONFIG_DIR);
     snprintf(paths->user_config_path, sizeof(paths->user_config_path), "%s/%s", paths->user_config_dir, USER_CONFIG_FILENAME);
+    snprintf(paths->presets_dir, sizeof(paths->presets_dir), "%s/%s", paths->user_config_dir, PRESETS_DIR);
     
     return 0;
 }
@@ -331,4 +333,161 @@ int config_migrate_to_user_config(const char *source_path) {
     
     printf("Migrated config from %s to %s\n", source_path, paths.user_config_path);
     return 0;
+}
+
+// Create preset directory
+int config_create_preset_directory(void) {
+    config_paths_t paths;
+    if (config_get_paths(&paths) != 0) return -1;
+    
+    // Create user config directory if it doesn't exist
+    mkdir(paths.user_config_dir, 0755);
+    
+    // Create presets directory
+    if (mkdir(paths.presets_dir, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, "Could not create presets directory: %s\n", paths.presets_dir);
+        return -1;
+    }
+    
+    return 0;
+}
+
+// List available presets
+int config_list_presets(preset_info_t *presets, int *count) {
+    if (!presets || !count) return -1;
+    
+    *count = 0;
+    
+    config_paths_t paths;
+    if (config_get_paths(&paths) != 0) return -1;
+    
+    // Create presets directory if it doesn't exist
+    config_create_preset_directory();
+    
+    DIR *dir = opendir(paths.presets_dir);
+    if (!dir) {
+        fprintf(stderr, "Could not open presets directory: %s\n", paths.presets_dir);
+        return -1;
+    }
+    
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && *count < MAX_PRESETS) {
+        // Check for .conf files
+        size_t len = strlen(entry->d_name);
+        if (len > 5 && strcmp(entry->d_name + len - 5, ".conf") == 0) {
+            // Extract preset name (filename without .conf extension)
+            strncpy(presets[*count].name, entry->d_name, MAX_PRESET_NAME - 1);
+            presets[*count].name[MAX_PRESET_NAME - 1] = '\0';
+            presets[*count].name[len - 5] = '\0';  // Remove .conf extension
+            
+            // Build full path
+            snprintf(presets[*count].path, sizeof(presets[*count].path), 
+                    "%s/%s", paths.presets_dir, entry->d_name);
+            
+            // Try to read description from file (first non-comment line that looks like a description)
+            FILE *file = fopen(presets[*count].path, "r");
+            if (file) {
+                char line[MAX_CONFIG_LINE];
+                presets[*count].description[0] = '\0';
+                
+                while (fgets(line, sizeof(line), file) && presets[*count].description[0] == '\0') {
+                    // Remove newline
+                    line[strcspn(line, "\n")] = 0;
+                    
+                    // Skip empty lines and comments
+                    if (strlen(line) == 0 || line[0] == ';' || line[0] == '#' || line[0] == '[') {
+                        continue;
+                    }
+                    
+                    // Use first non-section line as description
+                    if (strchr(line, '=')) {
+                        // Skip key-value pairs, look for something that might be a description
+                        continue;
+                    }
+                    
+                    strncpy(presets[*count].description, line, sizeof(presets[*count].description) - 1);
+                    presets[*count].description[sizeof(presets[*count].description) - 1] = '\0';
+                }
+                
+                // If no description found, use a default
+                if (presets[*count].description[0] == '\0') {
+                    snprintf(presets[*count].description, sizeof(presets[*count].description), 
+                            "Preset configuration for %s", presets[*count].name);
+                }
+                
+                fclose(file);
+            }
+            
+            (*count)++;
+        }
+    }
+    
+    closedir(dir);
+    return 0;
+}
+
+// Save preset
+int config_save_preset(const char *name, const char *description, const device_config_t *config) {
+    if (!name || !config) return -1;
+    
+    config_paths_t paths;
+    if (config_get_paths(&paths) != 0) return -1;
+    
+    // Create presets directory if needed
+    config_create_preset_directory();
+    
+    // Build preset file path
+    char preset_path[512];
+    snprintf(preset_path, sizeof(preset_path), "%s/%s.conf", paths.presets_dir, name);
+    
+    // Save configuration to preset file
+    if (config_save_device_config(preset_path, config) != 0) {
+        return -1;
+    }
+    
+    // If description provided, prepend it as a comment
+    if (description && strlen(description) > 0) {
+        FILE *file = fopen(preset_path, "r");
+        if (file) {
+            // Read existing content
+            fseek(file, 0, SEEK_END);
+            long file_size = ftell(file);
+            fseek(file, 0, SEEK_SET);
+            
+            char *content = malloc(file_size + 1);
+            if (content) {
+                fread(content, 1, file_size, file);
+                content[file_size] = '\0';
+                fclose(file);
+                
+                // Write back with description
+                file = fopen(preset_path, "w");
+                if (file) {
+                    fprintf(file, "; %s\n", description);
+                    fprintf(file, "%s", content);
+                    fclose(file);
+                }
+                
+                free(content);
+            }
+        }
+    }
+    
+    printf("Preset '%s' saved to %s\n", name, preset_path);
+    return 0;
+}
+
+// Load preset
+int config_load_preset(const char *name, device_config_t *config) {
+    if (!name || !config) return -1;
+    
+    config_paths_t paths;
+    if (config_get_paths(&paths) != 0) return -1;
+    
+    // Build preset file path
+    char preset_path[512];
+    snprintf(preset_path, sizeof(preset_path), "%s/%s.conf", paths.presets_dir, name);
+    
+    // Load configuration from preset file
+    return config_load_device_config(preset_path, config);
 }

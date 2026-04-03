@@ -5,6 +5,7 @@
 #include "usb_driver.h"
 #include "cli.h"
 #include "config.h"
+#include "error.h"
 
 int main(int argc, char *argv[]) {
     cli_args_t args;
@@ -15,19 +16,20 @@ int main(int argc, char *argv[]) {
         return 0;
     } else if (result != 0) {
         // Argument parsing failed
+        ERROR_PRINT();
         return 1;
     }
     
     // Initialize USB driver
     usb_driver_t driver;
     if (usb_driver_init(&driver) != 0) {
-        fprintf(stderr, "Failed to initialize USB driver\n");
+        ERROR_PRINT();
         return 1;
     }
     
     // Find device
     if (usb_driver_find_device(&driver) != 0) {
-        fprintf(stderr, "Device not found\n");
+        ERROR_PRINT();
         usb_driver_cleanup(&driver);
         return 1;
     }
@@ -35,13 +37,16 @@ int main(int argc, char *argv[]) {
     // Check device state
     device_state_t state = usb_driver_check_state(&driver);
     if (state != DEVICE_STATE_READY) {
+        if (state == DEVICE_STATE_PERMISSION_ERROR) {
+            ERROR_PRINT();
+        }
         usb_driver_cleanup(&driver);
         return 1;
     }
     
     // Conquer device from kernel driver
     if (usb_driver_conquer(&driver) != 0) {
-        fprintf(stderr, "Failed to claim device\n");
+        ERROR_PRINT();
         usb_driver_cleanup(&driver);
         return 1;
     }
@@ -76,6 +81,14 @@ int main(int argc, char *argv[]) {
             
         case CMD_CONFIG:
             command_result = cmd_handle_config(&driver, &args);
+            break;
+            
+        case CMD_MONITOR:
+            command_result = cmd_handle_monitor(&driver, &args);
+            break;
+            
+        case CMD_DAEMON:
+            command_result = cmd_handle_daemon(&driver, &args);
             break;
             
         default:

@@ -1,0 +1,29 @@
+[Unit]
+Description=Fantech X9 Thor Mouse Driver (System-wide)
+Documentation=man:fantech-driver(1)
+After=graphical-session.target network.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fantech-driver daemon --auto /etc/fantech-x9-thor/config.conf
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+Environment=DISPLAY=:0
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/fantech-x9-thor
+PrivateTmp=true
+
+# Device access
+DeviceAllow=/dev/bus/usb/** rw
+DevicePolicy=auto
+
+[Install]
+WantedBy=multi-user.target

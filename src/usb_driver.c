@@ -1,18 +1,18 @@
 #include "usb_driver.h"
+#include "error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 // Initialize USB driver
 int usb_driver_init(usb_driver_t *driver) {
-    if (!driver) return -1;
+    if (!driver) RETURN_ERROR(ERROR_INVALID_ARGS, "Driver pointer is NULL");
     
     memset(driver, 0, sizeof(usb_driver_t));
     
     int result = libusb_init(&driver->ctx);
     if (result < 0) {
-        fprintf(stderr, "Failed to initialize libusb: %s\n", libusb_error_name(result));
-        return -1;
+        RETURN_ERROR_USB(ERROR_USB_INIT, "Failed to initialize libusb", result);
     }
     
     return 0;
@@ -39,15 +39,14 @@ void usb_driver_cleanup(usb_driver_t *driver) {
 
 // Find the Fantech X9 Thor device
 int usb_driver_find_device(usb_driver_t *driver) {
-    if (!driver || !driver->ctx) return -1;
+    if (!driver || !driver->ctx) RETURN_ERROR(ERROR_INVALID_ARGS, "Invalid driver or context");
     
     printf("Trying to find device...\n");
     
     driver->device = libusb_open_device_with_vid_pid(driver->ctx, FANTECH_VENDOR_ID, FANTECH_PRODUCT_ID);
     
     if (!driver->device) {
-        printf("Device not found.\n");
-        return -1;
+        RETURN_ERROR(ERROR_DEVICE_NOT_FOUND, "Fantech X9 Thor device not found");
     }
     
     printf("Device found.\n");
@@ -62,12 +61,12 @@ device_state_t usb_driver_check_state(usb_driver_t *driver) {
     
     int result = libusb_kernel_driver_active(driver->device, W_INDEX);
     if (result < 0) {
-        fprintf(stderr, "Error checking kernel driver: %s\n", libusb_error_name(result));
         if (result == LIBUSB_ERROR_ACCESS) {
+            ERROR_SET_USB(ERROR_DEVICE_ACCESS, "Permission denied accessing device", result);
             printf("Try adding a udev rule for your mouse or running as root.\n");
             return DEVICE_STATE_PERMISSION_ERROR;
         }
-        return DEVICE_STATE_NOT_FOUND;
+        RETURN_ERROR_USB(ERROR_DEVICE_NOT_FOUND, "Error checking kernel driver", result);
     }
     
     driver->device_busy = result;
@@ -77,19 +76,17 @@ device_state_t usb_driver_check_state(usb_driver_t *driver) {
 
 // Conquer device from kernel driver
 int usb_driver_conquer(usb_driver_t *driver) {
-    if (!driver || !driver->device) return -1;
+    if (!driver || !driver->device) RETURN_ERROR(ERROR_INVALID_ARGS, "Invalid driver or device");
     
     if (driver->device_busy && !driver->conquered) {
         int result = libusb_detach_kernel_driver(driver->device, W_INDEX);
         if (result < 0) {
-            fprintf(stderr, "Failed to detach kernel driver: %s\n", libusb_error_name(result));
-            return -1;
+            RETURN_ERROR_USB(ERROR_USB_DETACH, "Failed to detach kernel driver", result);
         }
         
         result = libusb_claim_interface(driver->device, W_INDEX);
         if (result < 0) {
-            fprintf(stderr, "Failed to claim interface: %s\n", libusb_error_name(result));
-            return -1;
+            RETURN_ERROR_USB(ERROR_USB_CLAIM, "Failed to claim interface", result);
         }
         
         driver->conquered = 1;
@@ -132,12 +129,11 @@ int usb_driver_send_payload(usb_driver_t *driver, const usb_payload_t *payload) 
     );
     
     if (result < 0) {
-        fprintf(stderr, "USB control transfer failed: %s\n", libusb_error_name(result));
-        return -1;
+        RETURN_ERROR_USB(ERROR_USB_TRANSFER, "USB control transfer failed", result);
     }
     
     if (result != payload->length) {
-        fprintf(stderr, "Warning: Only %d of %zu bytes sent\n", result, payload->length);
+        printf("Warning: Only %d of %zu bytes sent\n", result, payload->length);
     }
     
     return 0;

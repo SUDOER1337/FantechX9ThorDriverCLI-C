@@ -14,7 +14,9 @@ typedef enum {
     CMD_SET_COLOR,
     CMD_PRESET,
     CMD_CONFIG,
-    CMD_RESET
+    CMD_RESET,
+    CMD_MONITOR,
+    CMD_DAEMON,
 } command_type_t;
 
 // CLI arguments structure
@@ -39,6 +41,10 @@ typedef struct {
     // CONFIG subcommands
     char config_subcommand[64];
     char config_source[512];
+    
+    // MONITOR arguments
+    char monitor_subcommand[64];
+    int monitor_timeout;
 } cli_args_t;
 
 // Function declarations
@@ -54,6 +60,8 @@ int cmd_handle_set_color(usb_driver_t *driver, const cli_args_t *args);
 int cmd_handle_preset(usb_driver_t *driver, const cli_args_t *args);
 int cmd_handle_config(usb_driver_t *driver, const cli_args_t *args);
 int cmd_handle_reset(usb_driver_t *driver, const cli_args_t *args);
+int cmd_handle_monitor(usb_driver_t *driver, const cli_args_t *args);
+int cmd_handle_daemon(usb_driver_t *driver, const cli_args_t *args);
 
 // Utility functions
 int cli_validate_dpi(int dpi);
